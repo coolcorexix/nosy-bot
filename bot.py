@@ -23,20 +23,21 @@ logger = logging.getLogger(__name__)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /start is issued."""
     user = update.effective_user
-    await update.message.reply_text(f'Hi {user.first_name}! I am your bot. Nice to meet you!')
+    await update.message.reply_text("""
+    Hi {user.first_name}! I am your bot. Nice to meet you! 
+    Type /help to know more on how to use me.
+    """)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /help is issued."""
     help_text = """
 Available commands:
-/start - Start the bot
 /help - Show this help message
 /todo <description> - Add a new task
-/did <description> - Log a completed task
-/list - Show active tasks
-/done_list - Show completed tasks
 /focus <number> - Mark task as WIP
+/did <description> - Log a completed task
 /done <number> - Mark task as done
+/list - Show active tasks
     """
     await update.message.reply_text(help_text)
 
