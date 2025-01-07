@@ -4,6 +4,11 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 from models.todo import Todo, TaskState
 from enum import IntEnum
 from datetime import datetime, timedelta, time
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Enable logging
 logging.basicConfig(
@@ -161,7 +166,7 @@ async def check_progress(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Running check_progress job")
     
     message = (
-        "🔔 Time for a Task Check-in!\n\n"
+        "🔔 How are things going?\n\n"
         "Commands:\n"
         "/todo <description> - Add a new task\n"
         "/did <description> - Log a completed task\n"
@@ -252,8 +257,14 @@ async def handle_did_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     """Start the bot."""
+    # Get token from environment variable
+    bot_token = os.getenv('BOT_TOKEN')
+    if not bot_token:
+        logger.error("BOT_TOKEN environment variable is not set!")
+        return
+
     # Create the Application and pass your bot's token
-    application = Application.builder().token('7946888295:AAHN9z2ZCQjKIzXuVWAw3Lovo05apgYO8IM').build()
+    application = Application.builder().token(bot_token).build()
 
     # Add command handlers
     application.add_handler(CommandHandler("start", start))

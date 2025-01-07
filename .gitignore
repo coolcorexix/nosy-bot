@@ -1,6 +1,10 @@
 # SQLite database
 nosy_bot.db
 
+# Environment variables
+.env
+.env.*
+
 # Python
 __pycache__/
 *.py[cod]
