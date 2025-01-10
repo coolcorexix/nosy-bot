@@ -2,12 +2,14 @@ import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, ConversationHandler
 from models.todo import Todo, TaskState
+from models.base import Database
 from enum import IntEnum
 from datetime import datetime, timedelta, time
 import os
 from dotenv import load_dotenv
-import pytz  # Add this import
+import pytz
 from openai import OpenAI
+import requests
 
 # Load environment variables
 load_dotenv()
@@ -20,6 +22,15 @@ logging.basicConfig(
 
 # Create logger
 logger = logging.getLogger(__name__)
+
+# Initialize database with absolute path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+db_path = os.path.join(current_dir, "nosy_bot.db")
+print(f"Using database at: {db_path}")
+db = Database(db_path)
+
+# Update Todo class to use our database instance
+Todo.db = db
 
 # Add states for conversation
 WAITING_FOR_CANCEL_REASON = 1
@@ -37,10 +48,10 @@ openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /start is issued."""
     user = update.effective_user
-    await update.message.reply_text("""
-    Hi {user.first_name}! I am your bot. Nice to meet you! 
-    Type /help to know more on how to use me.
-    """)
+    await update.message.reply_text(
+        f"Hi {user.first_name}! I am your bot. Nice to meet you!\n"
+        "Type /help to know more on how to use me."
+    )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /help is issued."""
@@ -54,13 +65,13 @@ Available commands:
 /cancel <number> - Cancel a task
 /list - Show active tasks
 /cancelled - Show cancelled tasks
+/summarize <number_of_days> - Summarize completed tasks for the user
     """
     await update.message.reply_text(help_text)
 
 async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Add a task to the todo list."""
     user_id = update.effective_user.id
-    
     if not context.args:
         await update.message.reply_text(
             "Please provide a task description.\n"
@@ -197,21 +208,25 @@ async def check_progress(context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Skipping check_progress - outside working hours (current hour: {current_hour})")
         return
     
-    message = (
-        "🔔 How are things going?\n\n"
-        "Commands:\n"
-        "/todo <description> - Add a new task\n"
-        "/did <description> - Log a completed task\n"
-        "/list - View your tasks\n"
-        "/focus <number> - Mark task as In Progress\n"
-        "/done <number> - Mark task as Complete"
-    )
-    
     try:
         users = Todo.get_all_users()
         logger.info(f"Sending reminders to {len(users)} users")
         
         for user_id in users:
+            # Get user's name
+            user_info = await context.bot.get_chat(user_id)
+            username = user_info.first_name
+            
+            message = (
+                f"Hey {username}! 👋 How are things going?\n\n"
+                "Here's what you can do:\n"
+                "/todo <description> - Add a new task\n"
+                "/did <description> - Log a completed task\n"
+                "/list - View your tasks\n"
+                "/focus <number> - Mark task as In Progress\n"
+                "/done <number> - Mark task as Complete"
+            )
+            
             await context.bot.send_message(chat_id=user_id, text=message)
             logger.info(f"Sent reminder to user {user_id}")
     except Exception as e:
@@ -408,6 +423,62 @@ async def generate_weekly_summary(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error in weekly summary generation: {e}")
 
+async def summarize_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Summarize completed tasks for the user."""
+    user_id = update.effective_user.id
+    print('aaaa: ', user_id)
+    
+    # Get optional days parameter
+    days = 7  # default
+    if context.args:
+        try:
+            days = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text(
+                "Invalid number of days. Using default (7 days).\n"
+                "Usage: /summarize [number_of_days]"
+            )
+    
+    # Send initial message
+    status_message = await update.message.reply_text("🤔 Analyzing your completed tasks...")
+    
+    try:
+        # Call the summary endpoint using requests
+        response = requests.post(
+            'http://localhost:2108/api/summarize_done',
+            json={
+                'user_id': user_id,
+                'days': days
+            }
+        )
+        
+        data = response.json()
+        
+        if 'error' in data:
+            await status_message.edit_text(f"❌ Error: {data['error']}")
+            return
+        
+        # Format the response
+        summary = data['summary']
+        total_tasks = data.get('total_tasks', 0)
+        
+        message = (
+            f"📊 *Summary of your last {days} days*\n\n"
+            f"{summary}\n\n"
+            f"Total tasks completed: {total_tasks}"
+        )
+        
+        await status_message.edit_text(
+            message,
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        logger.error(f"Error getting summary: {e}")
+        await status_message.edit_text(
+            "❌ Sorry, I couldn't generate your summary right now. Please try again later."
+        )
+
 def main():
     """Start the bot."""
     # Get token from environment variable
@@ -430,7 +501,9 @@ def main():
     application.add_handler(CommandHandler("done_list", list_done))
     application.add_handler(CommandHandler("focus", focus))
     application.add_handler(CommandHandler("done", done_task))
-
+    application.add_handler(CommandHandler("cancel", cancel_task))
+    application.add_handler(CommandHandler("cancelled", list_cancelled))
+    application.add_handler(CommandHandler("summarize", summarize_tasks))
     # Add photo handlers
     application.add_handler(MessageHandler(
         filters.PHOTO & filters.CaptionRegex('^/todo'),

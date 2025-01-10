@@ -14,5 +14,5 @@ python migrations/run_migrations.py down # to rollback migrations
 ```
 eval "$(ssh-agent -s)"
 ssh-add ~/.ssh/nosy_bot_prod\ 
-path/to/venv/bin
+path/to/venv/bin/pip3 install -r requirements.txt
 ```

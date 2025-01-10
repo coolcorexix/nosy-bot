@@ -1,5 +1,4 @@
 from typing import List, Tuple
-from .base import db
 from enum import IntEnum
 from datetime import datetime
 
@@ -13,6 +12,14 @@ class TaskState(IntEnum):
         return self.name
 
 class Todo:
+    db = None  # This will be set by the application
+    
+    @classmethod
+    def get_connection(cls):
+        if cls.db is None:
+            raise RuntimeError("Database not initialized")
+        return cls.db.get_connection()
+    
     def __init__(self, user_id: int, task: str, id: int = None, created_at: str = None, 
                  state: TaskState = TaskState.TODO, image_file_id: str = None):
         self.id = id
@@ -27,7 +34,7 @@ class Todo:
                image_file_id: str = None) -> bool:
         """Create a new todo item with optional initial state and image."""
         try:
-            with db.get_connection() as conn:
+            with cls.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     '''INSERT INTO tasks 
@@ -43,7 +50,7 @@ class Todo:
     @classmethod
     def get_all_by_user(cls, user_id: int, include_done: bool = False) -> List[Tuple[int, str, str, str]]:
         """Get todos for a user. By default, excludes completed tasks."""
-        with db.get_connection() as conn:
+        with cls.get_connection() as conn:
             cursor = conn.cursor()
             if include_done:
                 cursor.execute(
@@ -67,7 +74,7 @@ class Todo:
     @classmethod
     def get_active_tasks(cls) -> List[Tuple[int, int, str, int]]:
         """Get all active tasks (TODO or WIP) with their user_ids."""
-        with db.get_connection() as conn:
+        with cls.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 'SELECT id, user_id, task, state FROM tasks WHERE state != ?',
@@ -79,7 +86,7 @@ class Todo:
     def update_state(cls, task_id: int, user_id: int, new_state: TaskState) -> bool:
         """Update task state."""
         try:
-            with db.get_connection() as conn:
+            with cls.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     'UPDATE tasks SET state = ? WHERE id = ? AND user_id = ?',
@@ -93,7 +100,7 @@ class Todo:
     @classmethod
     def get_all_users(cls) -> List[int]:
         """Get all unique user IDs who have interacted with the bot."""
-        with db.get_connection() as conn:
+        with cls.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('SELECT DISTINCT user_id FROM tasks')
             return [row[0] for row in cursor.fetchall()] 
@@ -101,7 +108,7 @@ class Todo:
     @classmethod
     def get_done_tasks(cls, user_id: int) -> List[Tuple[int, str, str, str]]:
         """Get completed tasks for a user."""
-        with db.get_connection() as conn:
+        with cls.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 '''SELECT id, task, state, image_file_id 
@@ -117,12 +124,14 @@ class Todo:
     def cancel_task(cls, task_id: int, user_id: int, cancel_reason: str) -> bool:
         """Cancel a task with a reason."""
         try:
-            with db.get_connection() as conn:
+            with cls.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    '''UPDATE tasks 
+                    '''
+                    UPDATE tasks 
                        SET state = ?, cancel_reason = ? 
-                       WHERE id = ? AND user_id = ? AND state != ?''',
+                       WHERE id = ? AND user_id = ? AND state != ?
+                    ''',
                     (TaskState.CANCELLED, cancel_reason, task_id, user_id, TaskState.DONE)
                 )
                 return cursor.rowcount > 0
@@ -133,7 +142,7 @@ class Todo:
     @classmethod
     def get_cancelled_tasks(cls, user_id: int) -> List[Tuple[int, str, str, str, str]]:
         """Get cancelled tasks for a user."""
-        with db.get_connection() as conn:
+        with cls.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 '''SELECT id, task, state, image_file_id, cancel_reason
@@ -148,16 +157,26 @@ class Todo:
     @classmethod
     def get_tasks_completed_in_range(cls, user_id: int, start_date: datetime, end_date: datetime) -> List[Tuple[int, str, str, datetime]]:
         """Get tasks completed between start_date and end_date."""
-        with db.get_connection() as conn:
+        with cls.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                '''SELECT id, task, state, created_at 
-                   FROM tasks 
-                   WHERE user_id = ? 
-                   AND state = ? 
-                   AND created_at BETWEEN ? AND ?
-                   ORDER BY created_at''',
-                (user_id, TaskState.DONE, start_date.isoformat(), end_date.isoformat())
-            )
+            query = '''
+                SELECT id, task, state, created_at 
+                FROM tasks 
+                WHERE user_id = ? 
+                AND state = ? 
+                AND created_at BETWEEN ? AND ?
+                ORDER BY created_at
+            '''
+            # Format dates as strings in SQLite format: YYYY-MM-DD HH:MM:SS
+            start_str = start_date.strftime('%Y-%m-%d %H:%M:%S')
+            end_str = end_date.strftime('%Y-%m-%d %H:%M:%S')
+            
+            print('Query:', query)
+            print('Query params:', user_id, int(TaskState.DONE), start_str, end_str)
+            
+            cursor.execute(query, (user_id, int(TaskState.DONE), start_str, end_str))
+            results = cursor.fetchall()
+            print('Query results:', results)
+            
             return [(id, task, TaskState(state).name, created_at) 
                     for id, task, state, created_at in cursor.fetchall()] 
