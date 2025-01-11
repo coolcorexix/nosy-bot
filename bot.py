@@ -82,8 +82,9 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     task = ' '.join(context.args)
     
-    if Todo.create(user_id, task, TaskState.TODO):
-        await update.message.reply_text(f"Task added: {task}")
+    task_id = Todo.create(user_id, task, TaskState.TODO)
+    if task_id:
+        await update.message.reply_text(f"Task added: {task} (ID: {task_id})")
     else:
         await update.message.reply_text("Failed to add task. Please try again.")
 
@@ -278,8 +279,9 @@ async def handle_todo_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not task:
         task = "📷 Image task"
     
-    if Todo.create(user_id, task, TaskState.TODO, image_file_id):
-        await update.message.reply_text(f"Task added: {task}")
+    task_id = Todo.create(user_id, task, TaskState.TODO, image_file_id)
+    if task_id:
+        await update.message.reply_text(f"Task added: {task} (ID: {task_id})")
     else:
         await update.message.reply_text("Failed to add task. Please try again.")
 

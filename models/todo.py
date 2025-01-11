@@ -31,8 +31,9 @@ class Todo:
 
     @classmethod
     def create(cls, user_id: int, task: str, state: TaskState = TaskState.TODO, 
-               image_file_id: str = None) -> bool:
-        """Create a new todo item with optional initial state and image."""
+               image_file_id: str = None) -> int:
+        """Create a new todo item with optional initial state and image.
+        Returns: task_id if successful, None if failed"""
         try:
             with cls.get_connection() as conn:
                 cursor = conn.cursor()
@@ -42,10 +43,10 @@ class Todo:
                        VALUES (?, ?, ?, ?)''',
                     (user_id, task, state, image_file_id)
                 )
-                return True
+                return cursor.lastrowid  # Return the ID of the newly created task
         except Exception as e:
             print(f"Error adding task: {e}")
-            return False
+            return None
 
     @classmethod
     def get_all_by_user(cls, user_id: int, include_done: bool = False) -> List[Tuple[int, str, str, str]]:
