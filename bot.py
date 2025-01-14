@@ -251,10 +251,10 @@ async def morning_reminder(context: ContextTypes.DEFAULT_TYPE):
             username = user_info.first_name
             
             message = (
-                f"Hey {username}! 🌅\n\n"
-                f"Help me list out the things you gonna do today. "
-                f"I would love to help you keep track of them!\n\n"
-                f"Just use /todo followed by your task description, like:\n"
+                f"Hi {username}! 🌅\n\n"
+                f"What are you gonna do today? \n"
+                f"Use /list to see your active tasks. \n"
+                f"And use /todo to add a new task, like:\n"
                 f"/todo Complete project presentation"
             )
             
