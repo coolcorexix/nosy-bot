@@ -306,46 +306,68 @@ async def handle_did_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cancel_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start the cancel task process."""
+    print("\n=== CANCEL TASK FUNCTION ===")
+    print("[DEBUG] Entering cancel_task function")
     user_id = update.effective_user.id
-    
+    print(f"[DEBUG] User {user_id} initiated task cancellation")
+
     if not context.args:
         await update.message.reply_text("Please provide a task number.\nUsage: /cancel 1")
         return ConversationHandler.END
     
     try:
         task_id = int(context.args[0])
+        print(f"[DEBUG] Task ID {task_id} received for cancellation")
+        print(f"[DEBUG] Current conversation state: {context.user_data.get('state', 'None')}")
     except ValueError:
         await update.message.reply_text("Please provide a valid task number.")
         return ConversationHandler.END
     
     # Store the task_id temporarily
     cancel_task_ids[user_id] = task_id
+    print(f"[DEBUG] Stored task_id {task_id} for user {user_id}")
+    print(f"[DEBUG] Setting state to WAITING_FOR_CANCEL_REASON")
+    context.user_data['state'] = WAITING_FOR_CANCEL_REASON
     
     await update.message.reply_text(
         "Why are you cancelling this task? Please provide a reason."
     )
+    print("[DEBUG] Returning WAITING_FOR_CANCEL_REASON state")
     return WAITING_FOR_CANCEL_REASON
 
 async def handle_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the cancel reason and update the task."""
+    print("\n=== HANDLE CANCEL REASON FUNCTION ===")
+    print("[DEBUG] Entering handle_cancel_reason function")
+    print(f"[DEBUG] Current state: {context.user_data.get('state', 'None')}")
+    print(f"[DEBUG] Message text received: {update.message.text}")
+    
     user_id = update.effective_user.id
     task_id = cancel_task_ids.get(user_id)
-    
+    print(f"[DEBUG] User ID: {user_id}")
+    print(f"[DEBUG] Task ID from storage: {task_id}")
+
     if not task_id:
+        print("[DEBUG] No task_id found in storage")
         await update.message.reply_text("Something went wrong. Please try again.")
         return ConversationHandler.END
     
     cancel_reason = update.message.text
-    
+    print(f"[DEBUG] Cancel reason received: {cancel_reason}")
+
     if Todo.cancel_task(task_id, user_id, cancel_reason):
+        print(f"[DEBUG] Successfully cancelled task {task_id}")
         await update.message.reply_text(f"Task {task_id} cancelled.\nReason: {cancel_reason}")
     else:
+        print(f"[DEBUG] Failed to cancel task {task_id}")
         await update.message.reply_text(
             "Failed to cancel task. Please check if the task exists and isn't already completed."
         )
     
     # Clean up
     del cancel_task_ids[user_id]
+    context.user_data.pop('state', None)
+    print("[DEBUG] Cleanup completed, ending conversation")
     return ConversationHandler.END
 
 async def list_cancelled(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -492,29 +514,58 @@ def main():
     # Create the Application and pass your bot's token
     application = Application.builder().token(bot_token).build()
 
-    # Add command handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("todo", add_task))
-    application.add_handler(CommandHandler("td", add_task))
-    application.add_handler(CommandHandler("did", did_task))
-    application.add_handler(CommandHandler("list", list_tasks))
-    application.add_handler(CommandHandler("l", list_tasks))
-    application.add_handler(CommandHandler("done_list", list_done))
-    application.add_handler(CommandHandler("focus", focus))
-    application.add_handler(CommandHandler("done", done_task))
-    application.add_handler(CommandHandler("cancel", cancel_task))
-    application.add_handler(CommandHandler("cancelled", list_cancelled))
-    application.add_handler(CommandHandler("summarize", summarize_tasks))
-    # Add photo handlers
-    application.add_handler(MessageHandler(
-        filters.PHOTO & filters.CaptionRegex('^/todo'),
-        handle_todo_photo
-    ))
-    application.add_handler(MessageHandler(
-        filters.PHOTO & filters.CaptionRegex('^/did'),
-        handle_did_photo
-    ))
+    # 1. First, add the conversation handler
+    cancel_conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("cancel", cancel_task)
+        ],
+        states={
+            WAITING_FOR_CANCEL_REASON: [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND, 
+                    handle_cancel_reason,
+                    block=True
+                )
+            ]
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel_task),
+            CommandHandler("help", help_command)
+        ],
+        allow_reentry=True,
+        name="cancel_conversation"
+    )
+    
+    # Add conversation handler in group 1
+    application.add_handler(cancel_conv_handler, group=1)
+
+    # 2. Then add all other command handlers in group 2
+    handlers_group2 = [
+        CommandHandler("start", start),
+        CommandHandler("help", help_command),
+        CommandHandler("todo", add_task),
+        CommandHandler("td", add_task),
+        CommandHandler("did", did_task),
+        CommandHandler("list", list_tasks),
+        CommandHandler("l", list_tasks),
+        CommandHandler("done_list", list_done),
+        CommandHandler("focus", focus),
+        CommandHandler("done", done_task),
+        CommandHandler("cancelled", list_cancelled),
+        CommandHandler("summarize", summarize_tasks),
+        MessageHandler(
+            filters.PHOTO & filters.CaptionRegex('^/todo'),
+            handle_todo_photo
+        ),
+        MessageHandler(
+            filters.PHOTO & filters.CaptionRegex('^/did'),
+            handle_did_photo
+        )
+    ]
+
+    # Add all other handlers in group 2
+    for handler in handlers_group2:
+        application.add_handler(handler, group=2)
 
     # Add job queues
     job_queue = application.job_queue
@@ -536,18 +587,6 @@ def main():
         name='morning_reminder'
     )
     logger.info("Configured morning_reminder job (daily at 5 AM except Sundays)")
-
-    # Add cancel conversation handler
-    cancel_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("cancel", cancel_task)],
-        states={
-            WAITING_FOR_CANCEL_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_cancel_reason)]
-        },
-        fallbacks=[],
-    )
-    
-    application.add_handler(cancel_conv_handler)
-    application.add_handler(CommandHandler("cancelled", list_cancelled))
 
     # Add weekly summary on Sundays at 8 PM
     job_queue.run_daily(
