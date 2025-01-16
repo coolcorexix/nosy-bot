@@ -11,6 +11,7 @@ import pytz
 from openai import OpenAI
 import requests
 from functools import partial
+from models.tag import Tag, TagSource
 
 # Load environment variables
 load_dotenv()
@@ -30,8 +31,13 @@ db_path = os.path.join(current_dir, "nosy_bot.db")
 print(f"Using database at: {db_path}")
 db = Database(db_path)
 
-# Update Todo class to use our database instance
+# Update Todo and Tag classes to use our database instance
 Todo.db = db
+Tag.db = db
+
+# Create tables if they don't exist
+Todo.create_tables()
+Tag.create_table()
 
 # Add states for conversation
 WAITING_FOR_CANCEL_REASON = 1
@@ -67,6 +73,7 @@ Available commands:
 /list - Show active tasks
 /cancelled - Show cancelled tasks
 /summarize <number_of_days> - Summarize completed tasks for the user
+/tag <task_id> #tag1 #tag2 - Add tags to an existing task
     """
     await update.message.reply_text(help_text)
 
@@ -102,10 +109,24 @@ async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         await update.message.reply_text("📋 Active Tasks (TODO & WIP):")
-        for task_id, task, state, image_file_id in tasks:
+        for task_id, task, state, image_file_id, tags in tasks:
             try:
                 emoji = "📌" if state == "TODO" else "🚀"  # Only TODO or WIP states
-                message = f"{emoji} {task_id}. {task} [{state}]"
+                
+                # Get tags with their sources
+                all_tags = Tag.get_tags_for_task(task_id, include_source=True)
+                extracted_tags = [tag for tag, source in all_tags if source == str(TagSource.EXTRACTED)]
+                manual_tags = [tag for tag, source in all_tags if source == str(TagSource.MANUAL)]
+                
+                # Format tags
+                
+                manual_tags_text = ' '.join([f'#{tag}' for tag in manual_tags]) if manual_tags else ''
+                
+                # Combine message parts
+                message = f"{emoji} {task_id}. {task}"
+                if manual_tags_text:
+                    message += f" {manual_tags_text}"
+                message += f" [{state}]"
                 
                 if image_file_id:
                     await update.message.reply_photo(
@@ -560,6 +581,68 @@ async def handle_done_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Wrapper for /done photo handler."""
     await handle_command_photo(update, context, 'done', handle_done_with_photo)
 
+async def add_tags(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Add tags to an existing task. Usage: /tag <task_id> #tag1 #tag2"""
+    try:
+        user_id = update.effective_user.id
+        
+        if not context.args or len(context.args) < 2:
+            await update.message.reply_text(
+                "Please provide a task ID and at least one tag.\n"
+                "Usage: /tag 1 #work #important"
+            )
+            return
+        
+        # Get task ID
+        try:
+            task_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("Invalid task ID. Please provide a number.")
+            return
+        
+        # Extract tags from the remaining arguments
+        tag_text = ' '.join(context.args[1:])
+        tags = Todo.extract_tags(tag_text)
+        
+        if not tags:
+            await update.message.reply_text(
+                "No valid tags found. Tags should start with #.\n"
+                "Example: /tag 1 #work #important"
+            )
+            return
+        
+        # Verify task exists and belongs to user
+        with Todo.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT id FROM tasks WHERE id = ? AND user_id = ?',
+                (task_id, user_id)
+            )
+            if not cursor.fetchone():
+                await update.message.reply_text("Task not found or you don't have permission to modify it.")
+                return
+        
+        # Add tags
+        if Tag.add_tags_to_task(task_id, tags, TagSource.MANUAL):
+            # Get all tags for the task to show the update
+            all_tags = Tag.get_tags_for_task(task_id, include_source=True)
+            extracted_tags = [tag for tag, source in all_tags if source == str(TagSource.EXTRACTED)]
+            manual_tags = [tag for tag, source in all_tags if source == str(TagSource.MANUAL)]
+            
+            response = f"✅ Added tags to task {task_id}.\n"
+            if extracted_tags:
+                response += f"\nExtracted tags: {' '.join(['#' + tag for tag in extracted_tags])}"
+            if manual_tags:
+                response += f"\nManual tags: {' '.join(['#' + tag for tag in manual_tags])}"
+            
+            await update.message.reply_text(response)
+        else:
+            await update.message.reply_text("Failed to add tags. Please try again.")
+            
+    except Exception as e:
+        print(f"Error in add_tags: {e}")
+        await update.message.reply_text("An error occurred while adding tags.")
+
 def main():
     """Start the bot."""
     # Get token from environment variable
@@ -632,7 +715,8 @@ def main():
         CommandHandler("focus", focus),
         CommandHandler("done", done_task),
         CommandHandler("cancelled", list_cancelled),
-        CommandHandler("summarize", summarize_tasks)
+        CommandHandler("summarize", summarize_tasks),
+        CommandHandler("tag", add_tags)
     ]
 
     # Add command handlers in group 2

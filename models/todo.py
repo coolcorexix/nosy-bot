@@ -1,6 +1,8 @@
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from enum import IntEnum
 from datetime import datetime
+import re
+from .tag import Tag
 
 class TaskState(IntEnum):
     TODO = 0
@@ -30,20 +32,65 @@ class Todo:
         self.image_file_id = image_file_id
 
     @classmethod
+    def create_tables(cls):
+        """Create necessary tables if they don't exist."""
+        with cls.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Create tasks table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    task TEXT NOT NULL,
+                    state INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    image_file_id TEXT,
+                    cancel_reason TEXT
+                )
+            ''')
+            
+            # Create tags table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS tags (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id INTEGER NOT NULL,
+                    tag TEXT NOT NULL,
+                    FOREIGN KEY (task_id) REFERENCES tasks(id),
+                    UNIQUE(task_id, tag)
+                )
+            ''')
+
+    @classmethod
+    def extract_tags(cls, task_description: str) -> list[str]:
+        """Extract hashtags from task description."""
+        tags = re.findall(r'#(\w+)', task_description)
+        return [tag.lower() for tag in tags]
+
+    @classmethod
     def create(cls, user_id: int, task: str, state: TaskState = TaskState.TODO, 
-               image_file_id: str = None) -> int:
-        """Create a new todo item with optional initial state and image.
-        Returns: task_id if successful, None if failed"""
+               image_file_id: str = None) -> Optional[int]:
+        """Create a new todo item with optional initial state and image."""
         try:
+            # Extract tags from task description
+            tags = cls.extract_tags(task)
+            
             with cls.get_connection() as conn:
                 cursor = conn.cursor()
+                # Insert task
                 cursor.execute(
                     '''INSERT INTO tasks 
                        (user_id, task, state, image_file_id) 
                        VALUES (?, ?, ?, ?)''',
                     (user_id, task, state, image_file_id)
                 )
-                return cursor.lastrowid  # Return the ID of the newly created task
+                task_id = cursor.lastrowid
+                
+                # Add tags using Tag class
+                if tags:
+                    Tag.add_tags_to_task(task_id, tags)
+                
+                return task_id
         except Exception as e:
             print(f"Error adding task: {e}")
             return None
@@ -177,11 +224,24 @@ class Todo:
         with cls.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT id, task, state, image_file_id 
-                FROM tasks 
-                WHERE user_id = ? 
-                AND state NOT IN (?, ?)
-                ORDER BY id DESC
+                SELECT t.id, t.task, t.state, t.image_file_id,
+                       GROUP_CONCAT(tags.tag, ' ') as tags
+                FROM tasks t
+                LEFT JOIN tags ON t.id = tags.task_id
+                WHERE t.user_id = ? 
+                AND t.state NOT IN (?, ?)
+                GROUP BY t.id
+                ORDER BY t.id DESC
             """, (user_id, TaskState.DONE, TaskState.CANCELLED))
-            return [(id, task, TaskState(state).name, image_file_id) 
-                    for id, task, state, image_file_id in cursor.fetchall()] 
+            
+            results = cursor.fetchall()
+            return [(id, task, TaskState(state).name, image_file_id, tags.split() if tags else [])
+                    for id, task, state, image_file_id, tags in results]
+
+    @classmethod
+    def get_task_tags(cls, task_id: int) -> list[str]:
+        """Get all tags for a task."""
+        with cls.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT tag FROM tags WHERE task_id = ?', (task_id,))
+            return [row[0] for row in cursor.fetchall()]
