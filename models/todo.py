@@ -49,28 +49,17 @@ class Todo:
             return None
 
     @classmethod
-    def get_all_by_user(cls, user_id: int, include_done: bool = False) -> List[Tuple[int, str, str, str]]:
-        """Get todos for a user. By default, excludes completed tasks."""
-        with cls.get_connection() as conn:
-            cursor = conn.cursor()
-            if include_done:
-                cursor.execute(
-                    '''SELECT id, task, state, image_file_id 
-                       FROM tasks 
-                       WHERE user_id = ? 
-                       ORDER BY created_at''',
-                    (user_id,)
-                )
-            else:
-                cursor.execute(
-                    '''SELECT id, task, state, image_file_id 
-                       FROM tasks 
-                       WHERE user_id = ? AND state != ? 
-                       ORDER BY created_at''',
-                    (user_id, TaskState.DONE)
-                )
-            return [(id, task, TaskState(state).name, image_file_id) 
-                    for id, task, state, image_file_id in cursor.fetchall()]
+    def get_all_by_user(cls, user_id):
+        """Get all active tasks (not done or cancelled) for a user."""
+        cursor = cls.db.cursor()
+        cursor.execute("""
+            SELECT id, task, state, image_file_id 
+            FROM todos 
+            WHERE user_id = ? 
+            AND state NOT IN ('DONE', 'CANCELLED')
+            ORDER BY id DESC
+        """, (user_id,))
+        return cursor.fetchall()
 
     @classmethod
     def get_active_tasks(cls) -> List[Tuple[int, int, str, int]]:
@@ -181,3 +170,18 @@ class Todo:
             
             return [(id, task, TaskState(state).name, created_at) 
                     for id, task, state, created_at in cursor.fetchall()] 
+
+    @classmethod
+    def get_active_tasks_by_user(cls, user_id):
+        """Get all active tasks (not done or cancelled) for a user."""
+        with cls.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, task, state, image_file_id 
+                FROM tasks 
+                WHERE user_id = ? 
+                AND state NOT IN (?, ?)
+                ORDER BY id DESC
+            """, (user_id, TaskState.DONE, TaskState.CANCELLED))
+            return [(id, task, TaskState(state).name, image_file_id) 
+                    for id, task, state, image_file_id in cursor.fetchall()] 

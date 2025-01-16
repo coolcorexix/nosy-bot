@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 import pytz
 from openai import OpenAI
 import requests
+from functools import partial
 
 # Load environment variables
 load_dotenv()
@@ -89,27 +90,39 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Failed to add task. Please try again.")
 
 async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """List active tasks (not done)."""
-    user_id = update.effective_user.id
-    
-    tasks = Todo.get_all_by_user(user_id)
-    
-    if not tasks:
-        await update.message.reply_text("You have no active tasks! Use /todo to add one.")
-        return
-    
-    await update.message.reply_text("📋 Active Tasks:")
-    for task_id, task, state, image_file_id in tasks:
-        emoji = "📌" if state == "TODO" else "🚀"  # Only TODO or WIP states
-        message = f"{emoji} {task_id}. {task} [{state}]"
+    """List active tasks (TODO and WIP only)."""
+    try:
+        user_id = update.effective_user.id
         
-        if image_file_id:
-            await update.message.reply_photo(
-                photo=image_file_id,
-                caption=message
-            )
-        else:
-            await update.message.reply_text(message)
+        tasks = Todo.get_active_tasks_by_user(user_id)
+        print(f"Active tasks for user {user_id}: {tasks}")
+        
+        if not tasks:
+            await update.message.reply_text("You have no active tasks! Use /todo to add one.")
+            return
+        
+        await update.message.reply_text("📋 Active Tasks (TODO & WIP):")
+        for task_id, task, state, image_file_id in tasks:
+            try:
+                emoji = "📌" if state == "TODO" else "🚀"  # Only TODO or WIP states
+                message = f"{emoji} {task_id}. {task} [{state}]"
+                
+                if image_file_id:
+                    await update.message.reply_photo(
+                        photo=image_file_id,
+                        caption=message
+                    )
+                else:
+                    await update.message.reply_text(message)
+            except Exception as e:
+                print(f"Error processing task {task_id}: {e}")
+                continue
+                
+    except Exception as e:
+        print(f"Error in list_tasks: {e}")
+        await update.message.reply_text(
+            "Sorry, something went wrong while fetching your tasks. Please try again later."
+        )
 
 async def list_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List completed tasks."""
@@ -265,17 +278,23 @@ async def morning_reminder(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Failed to send morning reminders: {e}")
 
 # Add these new handlers for photos
-async def handle_todo_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle photos with /todo caption."""
-    if not update.message.caption or not update.message.caption.startswith('/todo'):
+async def handle_command_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, command: str, handler_func):
+    """Generic handler for photos with commands in caption."""
+    if not update.message.caption or not update.message.caption.startswith(f'/{command}'):
         return
     
     user_id = update.effective_user.id
     image_file_id = update.message.photo[-1].file_id
-    logger.info(f"Handling todo photo with file ID: {image_file_id}")
+    logger.info(f"Handling /{command} photo with file ID: {image_file_id}")
     
     # Get caption text without the command
-    task = update.message.caption.replace('/todo', '').strip()
+    task = update.message.caption.replace(f'/{command}', '').strip()
+    
+    # Call the appropriate handler function
+    await handler_func(update, context, user_id, task, image_file_id)
+
+async def handle_todo_with_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, task: str, image_file_id: str):
+    """Handle /todo command with photo."""
     if not task:
         task = "📷 Image task"
     
@@ -285,17 +304,8 @@ async def handle_todo_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Failed to add task. Please try again.")
 
-async def handle_did_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle photos with /did caption."""
-    if not update.message.caption or not update.message.caption.startswith('/did'):
-        return
-    
-    user_id = update.effective_user.id
-    image_file_id = update.message.photo[-1].file_id
-    logger.info(f"Handling did photo with file ID: {image_file_id}")
-    
-    # Get caption text without the command
-    task = update.message.caption.replace('/did', '').strip()
+async def handle_did_with_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, task: str, image_file_id: str):
+    """Handle /did command with photo."""
     if not task:
         task = "📷 Image task completed"
     
@@ -303,6 +313,36 @@ async def handle_did_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ Logged completed task: {task}")
     else:
         await update.message.reply_text("Failed to log the task. Please try again.")
+
+async def handle_focus_with_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, task: str, image_file_id: str):
+    """Handle /focus command with photo."""
+    try:
+        task_id = int(task) if task else None
+        if not task_id:
+            await update.message.reply_text("Please provide a task number.\nUsage: /focus 1")
+            return
+            
+        if Todo.update_state(task_id, user_id, TaskState.WIP):
+            await update.message.reply_text(f"Task {task_id} is now in progress! 🚀")
+        else:
+            await update.message.reply_text("Failed to update task state. Please check the task number.")
+    except ValueError:
+        await update.message.reply_text("Please provide a valid task number.")
+
+async def handle_done_with_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, task: str, image_file_id: str):
+    """Handle /done command with photo."""
+    try:
+        task_id = int(task) if task else None
+        if not task_id:
+            await update.message.reply_text("Please provide a task number.\nUsage: /done 1")
+            return
+            
+        if Todo.update_state(task_id, user_id, TaskState.DONE):
+            await update.message.reply_text(f"Task {task_id} completed! 🎉")
+        else:
+            await update.message.reply_text("Failed to update task state. Please check the task number.")
+    except ValueError:
+        await update.message.reply_text("Please provide a valid task number.")
 
 async def cancel_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start the cancel task process."""
@@ -503,6 +543,23 @@ async def summarize_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "❌ Sorry, I couldn't generate your summary right now. Please try again later."
         )
 
+# Wrapper functions for photo handlers
+async def handle_todo_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Wrapper for /todo photo handler."""
+    await handle_command_photo(update, context, 'todo', handle_todo_with_photo)
+
+async def handle_did_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Wrapper for /did photo handler."""
+    await handle_command_photo(update, context, 'did', handle_did_with_photo)
+
+async def handle_focus_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Wrapper for /focus photo handler."""
+    await handle_command_photo(update, context, 'focus', handle_focus_with_photo)
+
+async def handle_done_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Wrapper for /done photo handler."""
+    await handle_command_photo(update, context, 'done', handle_done_with_photo)
+
 def main():
     """Start the bot."""
     # Get token from environment variable
@@ -539,8 +596,31 @@ def main():
     # Add conversation handler in group 1
     application.add_handler(cancel_conv_handler, group=1)
 
-    # 2. Then add all other command handlers in group 2
-    handlers_group2 = [
+    # 2. Add photo handlers (group 0 - highest priority)
+    photo_handlers = [
+        MessageHandler(
+            filters.PHOTO & filters.CaptionRegex('^/todo'),
+            handle_todo_photo
+        ),
+        MessageHandler(
+            filters.PHOTO & filters.CaptionRegex('^/did'),
+            handle_did_photo
+        ),
+        MessageHandler(
+            filters.PHOTO & filters.CaptionRegex('^/focus'),
+            handle_focus_photo
+        ),
+        MessageHandler(
+            filters.PHOTO & filters.CaptionRegex('^/done'),
+            handle_done_photo
+        )
+    ]
+    
+    for handler in photo_handlers:
+        application.add_handler(handler, group=0)
+
+    # 3. Then add all other command handlers (group 2)
+    command_handlers = [
         CommandHandler("start", start),
         CommandHandler("help", help_command),
         CommandHandler("todo", add_task),
@@ -552,19 +632,11 @@ def main():
         CommandHandler("focus", focus),
         CommandHandler("done", done_task),
         CommandHandler("cancelled", list_cancelled),
-        CommandHandler("summarize", summarize_tasks),
-        MessageHandler(
-            filters.PHOTO & filters.CaptionRegex('^/todo'),
-            handle_todo_photo
-        ),
-        MessageHandler(
-            filters.PHOTO & filters.CaptionRegex('^/did'),
-            handle_did_photo
-        )
+        CommandHandler("summarize", summarize_tasks)
     ]
 
-    # Add all other handlers in group 2
-    for handler in handlers_group2:
+    # Add command handlers in group 2
+    for handler in command_handlers:
         application.add_handler(handler, group=2)
 
     # Add job queues
